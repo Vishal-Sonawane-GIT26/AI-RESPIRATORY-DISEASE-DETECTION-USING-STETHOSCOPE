@@ -12,151 +12,148 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
-import { useAppContext } from '../context/AppContext';
-import { theme } from '../constants/Theme';
-import { strings } from '../utils/strings';
-import { getRecordings } from '../services/audioService';
-import { Recording } from '../context/AppContext';
+import { Colors } from '@/constants/Colors';
+import { useColorScheme } from '@/hooks/useColorScheme';
+import { getRecordings } from '@/utils/storage';
+import { Recording } from '@/types/recording';
 
 export default function HomeScreen() {
-  const { state } = useAppContext();
+  const colorScheme = useColorScheme();
   const router = useRouter();
+  const [recentRecordings, setRecentRecordings] = useState<Recording[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [recentRecordings, setRecentRecordings] = useState<Partial<Recording>[]>([]);
 
-  // Load recent recordings
+  const colors = Colors[colorScheme ?? 'light'];
+
   useEffect(() => {
-    const loadRecordings = async () => {
-      try {
-        setIsLoading(true);
-        
-        // If there are recordings in state, use those
-        if (state.recordings.length > 0) {
-          // Get only the 5 most recent recordings
-          setRecentRecordings(state.recordings.slice(0, 5));
-        } else {
-          // Otherwise fetch recordings
-          const recordings = await getRecordings();
-          setRecentRecordings(recordings.slice(0, 5));
-        }
-      } catch (error) {
-        console.error('Error loading recordings:', error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
+    loadRecentRecordings();
+  }, []);
 
-    loadRecordings();
-  }, [state.recordings]);
-
-  // In the real app, we would navigate properly with Expo Router
-  // For now, we'll simply display alerts instead of navigation
-  
-  // Navigate to Record screen
-  const handleRecord = () => {
-    // In a real implementation, we would navigate to the Record tab
-    console.log("Navigate to Record tab");
-    alert("Navigate to Record tab");
+  const loadRecentRecordings = async () => {
+    try {
+      const recordings = await getRecordings();
+      setRecentRecordings(recordings.slice(0, 3)); // Show only 3 most recent
+    } catch (error) {
+      console.error('Error loading recordings:', error);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  // Navigate to Recording History screen
-  const handleViewAllRecordings = () => {
-    // In a real implementation, we would navigate to the History tab
-    console.log("Navigate to History tab");
-    alert("Navigate to History tab");
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString);
+    return date.toLocaleDateString();
   };
 
-  // Navigate to Analysis screen
-  const handleAnalyze = (recording: Partial<Recording>) => {
-    // In a real implementation, we would navigate to the Analyze screen
-    console.log("Navigate to Analysis with recording ID:", recording.id);
-    alert("Navigate to Analysis with recording ID: " + recording.id);
+  const formatDuration = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // Render recording item
-  const renderRecordingItem = ({ item }: { item: Partial<Recording> }) => {
-    // Format date
-    const recordingDate = item.date ? new Date(item.date) : new Date();
-    const formattedDate = recordingDate.toLocaleDateString();
-    
-    return (
-      <TouchableOpacity
-        style={styles.recordingItem}
-        onPress={() => handleAnalyze(item)}
-      >
-        <View style={styles.recordingIcon}>
-          <Ionicons name="mic" size={24} color={theme.colors.primary} />
-        </View>
-        <View style={styles.recordingInfo}>
-          <Text style={styles.recordingDate}>Recording from {formattedDate}</Text>
-          <Text style={styles.recordingDuration}>
-            {item.duration ? `${item.duration.toFixed(1)} seconds` : 'Unknown duration'}
-          </Text>
-        </View>
-        <Ionicons name="chevron-forward" size={20} color={theme.colors.textSecondary} />
-      </TouchableOpacity>
-    );
-  };
+  const renderRecordingItem = ({ item }: { item: Recording }) => (
+    <TouchableOpacity
+      style={[styles.recordingItem, { backgroundColor: colors.background }]}
+      onPress={() => router.push(`/recording/${item.id}`)}
+    >
+      <View style={[styles.recordingIcon, { backgroundColor: `${colors.tint}20` }]}>
+        <Ionicons
+          name={item.type === 'cough' ? 'medical' : 'pulse'}
+          size={24}
+          color={colors.tint}
+        />
+      </View>
+      <View style={styles.recordingInfo}>
+        <Text style={[styles.recordingTitle, { color: colors.text }]}>
+          {item.type === 'cough' ? 'Cough Recording' : 'Breath Recording'}
+        </Text>
+        <Text style={[styles.recordingDate, { color: colors.icon }]}>
+          {formatDate(item.createdAt)} • {formatDuration(item.duration)}
+        </Text>
+      </View>
+      <Ionicons name="chevron-forward" size={20} color={colors.icon} />
+    </TouchableOpacity>
+  );
 
   return (
-    <SafeAreaView style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.greeting}>{strings.home.welcome}</Text>
-          <Text style={styles.username}>{state.user?.name || strings.home.guest}</Text>
-        </View>
-      </View>
-
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
       <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Record card */}
-        <TouchableOpacity style={styles.recordCard} onPress={handleRecord}>
-          <View style={styles.recordCardContent}>
-            <Ionicons name="mic" size={32} color="#fff" />
-            <Text style={styles.recordCardText}>{strings.home.recordCTA}</Text>
-          </View>
-        </TouchableOpacity>
+        {/* Header */}
+        <View style={styles.header}>
+          <Text style={[styles.title, { color: colors.text }]}>StethoPulse</Text>
+          <Text style={[styles.subtitle, { color: colors.icon }]}>
+            Monitor your respiratory health
+          </Text>
+        </View>
 
-        {/* Recent recordings section */}
-        <View style={styles.recentRecordingsHeader}>
-          <Text style={styles.sectionTitle}>{strings.home.recentRecordings}</Text>
-          <TouchableOpacity onPress={handleViewAllRecordings}>
-            <Text style={styles.viewAllText}>{strings.home.viewAll}</Text>
+        {/* Quick Actions */}
+        <View style={styles.actionsContainer}>
+          <TouchableOpacity
+            style={[styles.actionCard, styles.recordCard]}
+            onPress={() => router.push('/(tabs)/record')}
+          >
+            <Ionicons name="mic" size={32} color="#fff" />
+            <Text style={styles.actionCardText}>Record Cough</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.actionCard, { backgroundColor: colors.tint }]}
+            onPress={() => router.push('/(tabs)/record?type=breath')}
+          >
+            <Ionicons name="pulse" size={32} color="#fff" />
+            <Text style={styles.actionCardText}>Record Breath</Text>
           </TouchableOpacity>
         </View>
 
-        {isLoading ? (
-          <ActivityIndicator size="large" color={theme.colors.primary} style={styles.loader} />
-        ) : recentRecordings.length > 0 ? (
-          <FlatList
-            data={recentRecordings}
-            renderItem={renderRecordingItem}
-            keyExtractor={item => item.id || ''}
-            scrollEnabled={false}
-          />
-        ) : (
-          <View style={styles.emptyState}>
-            <Ionicons name="document" size={48} color={theme.colors.inactive} />
-            <Text style={styles.emptyStateText}>{strings.home.noRecordings}</Text>
-            <TouchableOpacity style={styles.recordButton} onPress={handleRecord}>
-              <Text style={styles.recordButtonText}>{strings.home.recordCTA}</Text>
+        {/* Recent Recordings */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={[styles.sectionTitle, { color: colors.text }]}>
+              Recent Recordings
+            </Text>
+            <TouchableOpacity onPress={() => router.push('/(tabs)/history')}>
+              <Text style={[styles.viewAllText, { color: colors.tint }]}>View All</Text>
             </TouchableOpacity>
           </View>
-        )}
 
-        {/* Health tips section */}
-        <View style={styles.tipsSection}>
-          <Text style={styles.sectionTitle}>Health Tips</Text>
-          <View style={styles.tipCard}>
-            <Ionicons name="water" size={24} color={theme.colors.primary} />
-            <Text style={styles.tipText}>
-              Stay hydrated! Drinking plenty of water helps maintain respiratory health.
+          {isLoading ? (
+            <ActivityIndicator size="large" color={colors.tint} style={styles.loader} />
+          ) : recentRecordings.length > 0 ? (
+            <FlatList
+              data={recentRecordings}
+              renderItem={renderRecordingItem}
+              keyExtractor={(item) => item.id}
+              scrollEnabled={false}
+            />
+          ) : (
+            <View style={styles.emptyState}>
+              <Ionicons name="medical-outline" size={48} color={colors.icon} />
+              <Text style={[styles.emptyStateText, { color: colors.icon }]}>
+                No recordings yet
+              </Text>
+              <TouchableOpacity
+                style={[styles.recordButton, { backgroundColor: colors.tint }]}
+                onPress={() => router.push('/(tabs)/record')}
+              >
+                <Text style={styles.recordButtonText}>Make First Recording</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+
+        {/* Health Tips */}
+        <View style={styles.section}>
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>Health Tips</Text>
+          <View style={[styles.tipCard, { backgroundColor: colors.background }]}>
+            <Ionicons name="water" size={24} color={colors.tint} />
+            <Text style={[styles.tipText, { color: colors.text }]}>
+              Stay hydrated to maintain healthy respiratory function
             </Text>
           </View>
-          <View style={styles.tipCard}>
-            <Ionicons name="fitness" size={24} color={theme.colors.primary} />
-            <Text style={styles.tipText}>
-              Regular exercise improves lung capacity and overall respiratory function.
+          <View style={[styles.tipCard, { backgroundColor: colors.background }]}>
+            <Ionicons name="fitness" size={24} color={colors.tint} />
+            <Text style={[styles.tipText, { color: colors.text }]}>
+              Regular exercise improves lung capacity
             </Text>
           </View>
         </View>
@@ -168,132 +165,131 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: theme.colors.background,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: theme.spacing.l,
-    paddingTop: theme.spacing.l,
-    paddingBottom: theme.spacing.m,
-  },
-  greeting: {
-    fontSize: theme.typography.fontSize.m,
-    color: theme.colors.textSecondary,
-  },
-  username: {
-    fontSize: theme.typography.fontSize.xl,
-    fontWeight: 'bold',
-    color: theme.colors.text,
   },
   content: {
     flex: 1,
-    paddingHorizontal: theme.spacing.l,
+    paddingHorizontal: 20,
   },
-  recordCard: {
-    backgroundColor: theme.colors.primary,
-    borderRadius: theme.borderRadius.l,
-    marginVertical: theme.spacing.l,
-    padding: theme.spacing.l,
-    ...theme.shadows.medium,
+  header: {
+    paddingTop: 20,
+    paddingBottom: 30,
   },
-  recordCardContent: {
+  title: {
+    fontSize: 32,
+    fontWeight: 'bold',
+    marginBottom: 8,
+  },
+  subtitle: {
+    fontSize: 16,
+  },
+  actionsContainer: {
     flexDirection: 'row',
+    gap: 16,
+    marginBottom: 30,
+  },
+  actionCard: {
+    flex: 1,
+    padding: 20,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: theme.spacing.l,
+    minHeight: 120,
   },
-  recordCardText: {
-    fontSize: theme.typography.fontSize.l,
-    fontWeight: 'bold',
+  recordCard: {
+    backgroundColor: '#FF6B6B',
+  },
+  actionCardText: {
     color: '#fff',
-    marginLeft: theme.spacing.m,
+    fontSize: 16,
+    fontWeight: '600',
+    marginTop: 8,
   },
-  recentRecordingsHeader: {
+  section: {
+    marginBottom: 30,
+  },
+  sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: theme.spacing.m,
+    marginBottom: 16,
   },
   sectionTitle: {
-    fontSize: theme.typography.fontSize.l,
+    fontSize: 20,
     fontWeight: 'bold',
-    color: theme.colors.text,
   },
   viewAllText: {
-    fontSize: theme.typography.fontSize.s,
-    color: theme.colors.primary,
+    fontSize: 14,
     fontWeight: '500',
   },
   loader: {
-    marginVertical: theme.spacing.xl,
+    marginVertical: 20,
   },
   recordingItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: theme.colors.surface,
-    borderRadius: theme.borderRadius.m,
-    marginBottom: theme.spacing.m,
-    padding: theme.spacing.m,
-    ...theme.shadows.small,
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
   recordingIcon: {
-    backgroundColor: `${theme.colors.primary}20`,
-    borderRadius: theme.borderRadius.m,
-    padding: theme.spacing.m,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   recordingInfo: {
     flex: 1,
-    marginLeft: theme.spacing.m,
+    marginLeft: 12,
+  },
+  recordingTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 4,
   },
   recordingDate: {
-    fontSize: theme.typography.fontSize.m,
-    color: theme.colors.text,
-    fontWeight: '500',
-  },
-  recordingDuration: {
-    fontSize: theme.typography.fontSize.s,
-    color: theme.colors.textSecondary,
-    marginTop: 2,
+    fontSize: 14,
   },
   emptyState: {
     alignItems: 'center',
-    paddingVertical: theme.spacing.xl,
+    paddingVertical: 40,
   },
   emptyStateText: {
-    fontSize: theme.typography.fontSize.m,
-    color: theme.colors.textSecondary,
-    marginTop: theme.spacing.m,
-    marginBottom: theme.spacing.l,
+    fontSize: 16,
+    marginTop: 12,
+    marginBottom: 20,
   },
   recordButton: {
-    backgroundColor: theme.colors.primary,
-    paddingVertical: theme.spacing.m,
-    paddingHorizontal: theme.spacing.l,
-    borderRadius: theme.borderRadius.m,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
   },
   recordButtonText: {
     color: '#fff',
-    fontWeight: 'bold',
-  },
-  tipsSection: {
-    marginTop: theme.spacing.l,
-    marginBottom: theme.spacing.xxl,
+    fontSize: 16,
+    fontWeight: '600',
   },
   tipCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: theme.colors.surface,
-    borderRadius: theme.borderRadius.m,
-    marginTop: theme.spacing.m,
-    padding: theme.spacing.m,
-    ...theme.shadows.small,
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
   },
   tipText: {
     flex: 1,
-    marginLeft: theme.spacing.m,
-    fontSize: theme.typography.fontSize.m,
-    color: theme.colors.text,
+    marginLeft: 12,
+    fontSize: 14,
+    lineHeight: 20,
   },
 });

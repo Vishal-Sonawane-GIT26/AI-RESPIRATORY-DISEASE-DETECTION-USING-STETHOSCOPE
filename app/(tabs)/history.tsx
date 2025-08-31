@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -7,50 +7,37 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
-  Share,
+  RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { format } from 'date-fns';
 import { Audio } from 'expo-av';
 
-import { useAppContext } from '../context/AppContext';
-import { theme } from '../constants/Theme';
-import { strings } from '../utils/strings';
-import { getRecordings, deleteRecording, playRecording } from '../services/audioService';
-import { Recording } from '../context/AppContext';
+import { Colors } from '@/constants/Colors';
+import { useColorScheme } from '@/hooks/useColorScheme';
+import { getRecordings, deleteRecording } from '@/utils/storage';
+import { playRecording } from '@/utils/audio';
+import { Recording } from '@/types/recording';
 
 export default function HistoryScreen() {
-  const { state, dispatch } = useAppContext();
+  const colorScheme = useColorScheme();
   const router = useRouter();
+  const colors = Colors[colorScheme ?? 'light'];
+
+  const [recordings, setRecordings] = useState<Recording[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [recordings, setRecordings] = useState<Partial<Recording>[]>([]);
-  const [filterType, setFilterType] = useState('all'); // 'all', 'analyzed', 'unanalyzed'
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [playingId, setPlayingId] = useState<string | null>(null);
   const [sound, setSound] = useState<Audio.Sound | null>(null);
+  const [filterType, setFilterType] = useState<'all' | 'cough' | 'breath'>('all');
 
-  // Load recordings from storage
-  useEffect(() => {
-    const loadRecordings = async () => {
-      try {
-        setIsLoading(true);
-        console.log('[HistoryScreen] Loading recordings from storage...');
-        const recordings = await getRecordings();
-        console.log(`[HistoryScreen] Loaded ${recordings.length} recordings`);
-        setRecordings(recordings);
-      } catch (error) {
-        console.error('[HistoryScreen] Error loading recordings:', error);
-        Alert.alert('Error', 'Unable to load past recordings');
-      } finally {
-        setIsLoading(false);
-      }
-    };
+  useFocusEffect(
+    useCallback(() => {
+      loadRecordings();
+    }, [])
+  );
 
-    loadRecordings();
-  }, [state.recordings]); // Reload when recordings in state change
-  
-  // Clean up sound when component unmounts
   useEffect(() => {
     return () => {
       if (sound) {
@@ -59,48 +46,66 @@ export default function HistoryScreen() {
     };
   }, [sound]);
 
-  // Filter recordings based on selection
-  const filteredRecordings = React.useMemo(() => {
-    switch (filterType) {
-      case 'analyzed':
-        return recordings.filter(r => r.analyzed);
-      case 'unanalyzed':
-        return recordings.filter(r => !r.analyzed);
-      default:
-        return recordings;
-    }
-  }, [recordings, filterType]);
-
-  // Play recording handler
-  const handlePlayRecording = async (recording: Partial<Recording>) => {
+  const loadRecordings = async () => {
     try {
-      if (!recording.id || !recording.uri) {
-        throw new Error('Invalid recording data');
-      }
+      const allRecordings = await getRecordings();
+      setRecordings(allRecordings);
+    } catch (error) {
+      console.error('Error loading recordings:', error);
+      Alert.alert('Error', 'Failed to load recordings');
+    } finally {
+      setIsLoading(false);
+      setIsRefreshing(false);
+    }
+  };
 
-      // If already playing this recording, stop it
+  const handleRefresh = () => {
+    setIsRefreshing(true);
+    loadRecordings();
+  };
+
+  const filteredRecordings = recordings.filter(recording => {
+    if (filterType === 'all') return true;
+    return recording.type === filterType;
+  });
+
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString);
+    return date.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  const formatDuration = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const handlePlayRecording = async (recording: Recording) => {
+    try {
       if (playingId === recording.id && sound) {
         await sound.stopAsync();
         setPlayingId(null);
         setSound(null);
         return;
       }
-      
-      // If playing a different recording, stop the current one
+
       if (sound) {
         await sound.stopAsync();
         setSound(null);
       }
-      
-      // Play the selected recording
-      console.log(`[HistoryScreen] Playing recording: ${recording.id}`);
+
       const newSound = await playRecording(recording.uri);
       
       if (newSound) {
         setSound(newSound);
         setPlayingId(recording.id);
         
-        // Set up playback status update listener to reset state when done
         newSound.setOnPlaybackStatusUpdate((status) => {
           if (status.isLoaded && status.didJustFinish) {
             setPlayingId(null);
@@ -108,56 +113,32 @@ export default function HistoryScreen() {
         });
       }
     } catch (error) {
-      console.error('[HistoryScreen] Error playing recording:', error);
+      console.error('Error playing recording:', error);
       Alert.alert('Error', 'Failed to play recording');
-      setPlayingId(null);
     }
   };
 
-  // Share recording handler
-  const handleShareRecording = async (recording: Partial<Recording>) => {
-    try {
-      if (!recording.uri) return;
-      
-      await Share.share({
-        url: recording.uri,
-        title: `Stethoscope Recording (${format(new Date(recording.createdAt || ''), 'MMM d, yyyy')})`,
-      });
-    } catch (error) {
-      console.error('[HistoryScreen] Error sharing recording:', error);
-      Alert.alert('Error', 'Failed to share recording');
-    }
-  };
-
-  // Delete recording handler
-  const handleDeleteRecording = (id: string) => {
+  const handleDeleteRecording = (recording: Recording) => {
     Alert.alert(
-      strings.history.deleteConfirmTitle || 'Delete Recording',
-      strings.history.deleteConfirmMessage || 'Are you sure you want to delete this recording? This cannot be undone.',
+      'Delete Recording',
+      'Are you sure you want to delete this recording? This action cannot be undone.',
       [
+        { text: 'Cancel', style: 'cancel' },
         {
-          text: strings.common.cancel || 'Cancel',
-          style: 'cancel',
-        },
-        {
-          text: strings.common.delete || 'Delete',
+          text: 'Delete',
           style: 'destructive',
           onPress: async () => {
             try {
-              // If this recording is playing, stop it
-              if (playingId === id && sound) {
+              if (playingId === recording.id && sound) {
                 await sound.stopAsync();
                 setSound(null);
                 setPlayingId(null);
               }
               
-              console.log(`[HistoryScreen] Deleting recording: ${id}`);
-              await deleteRecording(id);
-              dispatch({ type: 'DELETE_RECORDING', payload: id });
-              setRecordings(prev => prev.filter(r => r.id !== id));
-              console.log('[HistoryScreen] Recording deleted successfully');
+              await deleteRecording(recording.id);
+              setRecordings(prev => prev.filter(r => r.id !== recording.id));
             } catch (error) {
-              console.error('[HistoryScreen] Error deleting recording:', error);
+              console.error('Error deleting recording:', error);
               Alert.alert('Error', 'Failed to delete recording');
             }
           },
@@ -166,101 +147,86 @@ export default function HistoryScreen() {
     );
   };
 
-  // View recording details handler
-  const handleViewRecording = (recordingId: string) => {
-    console.log(`[HistoryScreen] Navigating to analyze screen with recording ID: ${recordingId}`);
-    // Navigate to the analyze screen with the recording ID
-    router.push(`/(tabs)/analyze?recordingId=${recordingId}`);
-  };
+  const renderFilterButton = (type: 'all' | 'cough' | 'breath', label: string) => (
+    <TouchableOpacity
+      style={[
+        styles.filterButton,
+        filterType === type && { backgroundColor: colors.tint },
+      ]}
+      onPress={() => setFilterType(type)}
+    >
+      <Text
+        style={[
+          styles.filterText,
+          { color: filterType === type ? '#fff' : colors.text },
+        ]}
+      >
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
 
-  // Render recording item
-  const renderRecordingItem = ({ item }: { item: Partial<Recording> }) => {
-    if (!item.id) return null;
-    
-    // Format date for display
-    const recordingDate = item.date ? new Date(item.date) : new Date();
-    const formattedDate = format(recordingDate, 'MMM d, yyyy • h:mm a');
+  const renderRecordingItem = ({ item }: { item: Recording }) => {
     const isPlaying = playingId === item.id;
 
     return (
-      <View style={styles.recordingItem}>
-        {/* Recording info section - tap to view analysis */}
-        <TouchableOpacity 
-          style={styles.recordingInfoContainer}
-          onPress={() => handleViewRecording(item.id!)}
-        >
-          <View style={[
-            styles.recordingIcon,
-            { backgroundColor: `${theme.colors.primary}20` }
-          ]}>
+      <View style={[styles.recordingItem, { backgroundColor: colors.background }]}>
+        <View style={styles.recordingHeader}>
+          <View style={[styles.recordingIcon, { backgroundColor: `${colors.tint}20` }]}>
             <Ionicons
-              name="medical"
+              name={item.type === 'cough' ? 'medical' : 'pulse'}
               size={24}
-              color={theme.colors.primary}
+              color={colors.tint}
             />
           </View>
-          
           <View style={styles.recordingInfo}>
-            <Text style={styles.recordingTitle}>
-              Stethoscope Recording
+            <Text style={[styles.recordingTitle, { color: colors.text }]}>
+              {item.type === 'cough' ? 'Cough Recording' : 'Breath Recording'}
             </Text>
-            <Text style={styles.recordingDate}>{formattedDate}</Text>
-            <Text style={styles.recordingDuration}>
-              {item.duration 
-                ? `${item.duration.toFixed(1)} seconds` 
-                : 'Unknown duration'}
+            <Text style={[styles.recordingDate, { color: colors.icon }]}>
+              {formatDate(item.createdAt)}
+            </Text>
+            <Text style={[styles.recordingDuration, { color: colors.icon }]}>
+              Duration: {formatDuration(item.duration)}
             </Text>
           </View>
-        </TouchableOpacity>
-        
-        {/* Action buttons */}
+        </View>
+
         <View style={styles.actionsContainer}>
-          {/* Play/Pause button */}
           <TouchableOpacity
             style={styles.actionButton}
-            onPress={() => item.uri && handlePlayRecording(item)}
+            onPress={() => handlePlayRecording(item)}
           >
-            <Ionicons 
-              name={isPlaying ? "pause-circle" : "play-circle"} 
-              size={28} 
-              color={theme.colors.primary} 
+            <Ionicons
+              name={isPlaying ? 'pause-circle' : 'play-circle'}
+              size={32}
+              color={colors.tint}
             />
           </TouchableOpacity>
-          
-          {/* Share button */}
+
           <TouchableOpacity
             style={styles.actionButton}
-            onPress={() => handleShareRecording(item)}
+            onPress={() => handleDeleteRecording(item)}
           >
-            <Ionicons name="share-outline" size={24} color={theme.colors.secondary} />
-          </TouchableOpacity>
-          
-          {/* Delete button */}
-          <TouchableOpacity
-            style={styles.actionButton}
-            onPress={() => handleDeleteRecording(item.id!)}
-          >
-            <Ionicons name="trash-outline" size={24} color={theme.colors.error} />
+            <Ionicons name="trash-outline" size={24} color="#FF6B6B" />
           </TouchableOpacity>
         </View>
       </View>
     );
   };
 
-  // Render empty state
   const renderEmptyState = () => (
     <View style={styles.emptyState}>
-      <Ionicons name="medical-outline" size={64} color={theme.colors.inactive} />
-      <Text style={styles.emptyStateTitle}>No Stethoscope Recordings</Text>
-      <Text style={styles.emptyStateDescription}>
-        You haven't made any stethoscope recordings yet. Tap below to make your first recording.
+      <Ionicons name="medical-outline" size={64} color={colors.icon} />
+      <Text style={[styles.emptyStateTitle, { color: colors.text }]}>
+        No Recordings Yet
+      </Text>
+      <Text style={[styles.emptyStateDescription, { color: colors.icon }]}>
+        Start by recording your first {filterType === 'all' ? 'cough or breath' : filterType} sample
       </Text>
       <TouchableOpacity
-        style={styles.recordButton}
-        onPress={() => {
-          console.log("[HistoryScreen] Navigating to Record tab");
-          router.navigate("/(tabs)/record");
-        }}
+        style={[styles.recordButton, { backgroundColor: colors.tint }]}
+        onPress={() => router.push('/(tabs)/record')}
       >
         <Text style={styles.recordButtonText}>Record Now</Text>
       </TouchableOpacity>
@@ -268,76 +234,36 @@ export default function HistoryScreen() {
   );
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>{strings.history.title}</Text>
+        <Text style={[styles.title, { color: colors.text }]}>Recording History</Text>
       </View>
 
       {/* Filters */}
       <View style={styles.filterContainer}>
-        <TouchableOpacity
-          style={[
-            styles.filterButton,
-            filterType === 'all' && styles.filterButtonActive,
-          ]}
-          onPress={() => setFilterType('all')}
-        >
-          <Text
-            style={[
-              styles.filterText,
-              filterType === 'all' && styles.filterTextActive,
-            ]}
-          >
-            {strings.history.all}
-          </Text>
-        </TouchableOpacity>
-        
-        <TouchableOpacity
-          style={[
-            styles.filterButton,
-            filterType === 'analyzed' && styles.filterButtonActive,
-          ]}
-          onPress={() => setFilterType('analyzed')}
-        >
-          <Text
-            style={[
-              styles.filterText,
-              filterType === 'analyzed' && styles.filterTextActive,
-            ]}
-          >
-            {strings.history.analyzedFilter}
-          </Text>
-        </TouchableOpacity>
-        
-        <TouchableOpacity
-          style={[
-            styles.filterButton,
-            filterType === 'unanalyzed' && styles.filterButtonActive,
-          ]}
-          onPress={() => setFilterType('unanalyzed')}
-        >
-          <Text
-            style={[
-              styles.filterText,
-              filterType === 'unanalyzed' && styles.filterTextActive,
-            ]}
-          >
-            {strings.history.unanalyzedFilter}
-          </Text>
-        </TouchableOpacity>
+        {renderFilterButton('all', 'All')}
+        {renderFilterButton('cough', 'Cough')}
+        {renderFilterButton('breath', 'Breath')}
       </View>
 
-      {/* Recordings list */}
+      {/* Recordings List */}
       {isLoading ? (
-        <ActivityIndicator size="large" color={theme.colors.primary} style={styles.loader} />
+        <ActivityIndicator size="large" color={colors.tint} style={styles.loader} />
       ) : (
         <FlatList
           data={filteredRecordings}
           renderItem={renderRecordingItem}
-          keyExtractor={(item) => item.id || 'unknown'}
+          keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
           ListEmptyComponent={renderEmptyState}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing}
+              onRefresh={handleRefresh}
+              tintColor={colors.tint}
+            />
+          }
         />
       )}
     </SafeAreaView>
@@ -347,130 +273,114 @@ export default function HistoryScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: theme.colors.background,
   },
   header: {
-    paddingHorizontal: theme.spacing.l,
-    paddingTop: theme.spacing.l,
-    paddingBottom: theme.spacing.m,
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 16,
   },
   title: {
-    fontSize: theme.typography.fontSize.xl,
+    fontSize: 28,
     fontWeight: 'bold',
-    color: theme.colors.text,
   },
   filterContainer: {
     flexDirection: 'row',
-    paddingHorizontal: theme.spacing.l,
-    paddingBottom: theme.spacing.m,
+    paddingHorizontal: 20,
+    paddingBottom: 16,
+    gap: 12,
   },
   filterButton: {
-    paddingVertical: theme.spacing.s,
-    paddingHorizontal: theme.spacing.m,
-    borderRadius: theme.borderRadius.m,
-    marginRight: theme.spacing.s,
-  },
-  filterButtonActive: {
-    backgroundColor: theme.colors.primary,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#E5E5E5',
   },
   filterText: {
-    fontSize: theme.typography.fontSize.s,
-    color: theme.colors.textSecondary,
-  },
-  filterTextActive: {
-    color: '#fff',
+    fontSize: 14,
     fontWeight: '500',
   },
   loader: {
     flex: 1,
     justifyContent: 'center',
-    alignItems: 'center',
   },
   listContent: {
-    padding: theme.spacing.l,
+    padding: 20,
+    flexGrow: 1,
   },
   recordingItem: {
-    flexDirection: 'column',
-    backgroundColor: theme.colors.surface,
-    borderRadius: theme.borderRadius.m,
-    marginBottom: theme.spacing.m,
-    overflow: 'hidden',
-    ...theme.shadows.small,
+    borderRadius: 12,
+    marginBottom: 16,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
-  recordingInfoContainer: {
+  recordingHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: theme.spacing.m,
+    marginBottom: 12,
   },
   recordingIcon: {
-    borderRadius: theme.borderRadius.m,
     width: 48,
     height: 48,
-    justifyContent: 'center',
+    borderRadius: 24,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   recordingInfo: {
     flex: 1,
-    marginLeft: theme.spacing.m,
+    marginLeft: 12,
   },
   recordingTitle: {
-    fontSize: theme.typography.fontSize.m,
-    fontWeight: '500',
-    color: theme.colors.text,
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 4,
   },
   recordingDate: {
-    fontSize: theme.typography.fontSize.s,
-    color: theme.colors.textSecondary,
-    marginTop: 2,
+    fontSize: 14,
+    marginBottom: 2,
   },
   recordingDuration: {
-    fontSize: theme.typography.fontSize.s,
-    color: theme.colors.textSecondary,
-    marginTop: 2,
+    fontSize: 12,
   },
   actionsContainer: {
     flexDirection: 'row',
     justifyContent: 'space-around',
     borderTopWidth: 1,
-    borderTopColor: `${theme.colors.border}50`,
-    padding: theme.spacing.s,
+    borderTopColor: '#E5E5E5',
+    paddingTop: 12,
   },
   actionButton: {
-    padding: theme.spacing.m,
-    borderRadius: theme.borderRadius.s,
-  },
-  deleteButton: {
-    padding: theme.spacing.s,
+    padding: 8,
   },
   emptyState: {
     flex: 1,
-    justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: theme.spacing.xl,
-    paddingVertical: theme.spacing.xxl,
+    justifyContent: 'center',
+    paddingHorizontal: 40,
   },
   emptyStateTitle: {
-    fontSize: theme.typography.fontSize.l,
+    fontSize: 20,
     fontWeight: 'bold',
-    color: theme.colors.text,
-    marginTop: theme.spacing.l,
+    marginTop: 16,
+    marginBottom: 8,
   },
   emptyStateDescription: {
-    fontSize: theme.typography.fontSize.m,
-    color: theme.colors.textSecondary,
+    fontSize: 16,
     textAlign: 'center',
-    marginTop: theme.spacing.m,
-    marginBottom: theme.spacing.l,
+    marginBottom: 24,
   },
   recordButton: {
-    backgroundColor: theme.colors.primary,
-    paddingVertical: theme.spacing.m,
-    paddingHorizontal: theme.spacing.l,
-    borderRadius: theme.borderRadius.m,
-    ...theme.shadows.small,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
   },
   recordButtonText: {
     color: '#fff',
-    fontWeight: 'bold',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });
